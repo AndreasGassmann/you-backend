@@ -1,7 +1,7 @@
 import * as Koa from "koa";
 import * as Router from "koa-router";
 import * as bodyParser from "koa-bodyparser";
-// import * as socketio from "socket.io";
+import * as socketio from "socket.io";
 import * as http from "http";
 import * as admin from "firebase-admin";
 
@@ -28,48 +28,6 @@ app.use(bodyParser());
 
 const router = new Router();
 
-router.post("/login-request", async (ctx, next) => {
-  const { address, location } = ctx.request.body;
-
-  // This registration token comes from the client FCM SDKs.
-  const registrationToken = db.get(address);
-  if (!registrationToken) {
-    // throw new Error("No push token for address");
-    ctx.status = 404;
-    ctx.body = "No push token for address";
-    return;
-  }
-
-  // See documentation on defining a message payload.
-  var message = {
-    notification: {
-      title: "New login request",
-      body: "Do you want to log in to '" + location + "'?"
-    },
-    data: {
-      location: location
-    },
-    token: registrationToken
-  };
-
-  console.log("Sending message", message);
-
-  // Send a message to the device corresponding to the provided
-  // registration token.
-  // admin
-  //   .messaging()
-  //   .send(message)
-  //   .then(response => {
-  //     // Response is a message ID string.
-  //     console.log("Successfully sent message:", response);
-  //   })
-  //   .catch(error => {
-  //     console.log("Error sending message:", error);
-  //   });
-
-  ctx.status = 200;
-});
-
 router.post("/push/register", async (ctx, next) => {
   const { address, pushToken } = ctx.request.body;
   console.log("address", address);
@@ -81,32 +39,57 @@ router.post("/push/register", async (ctx, next) => {
   ctx.status = 200;
 });
 
-// router.post("/login/response", async (ctx, next) => {
-//   const { requestId, challenge, signedChallenge } = ctx.request.body;
-//   console.log("requestId", requestId);
-//   console.log("challenge", challenge);
-//   console.log("signedMessage", signedChallenge);
-//   (ctx.app as any).io.emit("signResponse", { key: "value" });
-//   ctx.status = 200;
-// });
+router.post("/login/response", async (ctx, next) => {
+  const { uuid, username, password } = ctx.request.body;
+
+  if (OPEN_SOCKETS[uuid] !== undefined) {
+    OPEN_SOCKETS[uuid].emit("login_response_" + uuid, { username: username, password: password })
+    ctx.status = 200
+  } else {
+    ctx.status = 400
+  }
+});
 
 app.use(router.routes()).use(router.allowedMethods());
 
 const server = http.createServer(app.callback());
-// const io = socketio(server);
+const io = socketio(server)
 
-// (app as any).io = io;
+const OPEN_SOCKETS = {};
 
-// io.on("connection", socket => {
-//   console.log("a user connected: " + socket.id);
-//   socket.on("processedMessage", (msg: string) => {
-//     socket.broadcast.emit("processedMessage", msg);
-//   });
-//   socket.on("stats", (msg: string) => {
-//     socket.broadcast.emit("stats", msg);
-//   });
-// });
+(app as any).io = io;
 
-server.listen(3000, () => {
-  console.log("Application is starting on port 3000");
+io.on("connection", socket => {
+  console.log("a user connected: " + socket.id)
+  socket.on("login_request", (msg) => {
+    OPEN_SOCKETS[msg.uuid] = socket
+    const registrationToken = db.get(msg.address)
+    if (registrationToken) {
+      const message = {
+        notification: {
+          title: "New login request",
+          body: "Do you want to log in to '" + msg.location + "'?"
+        },
+        data: {
+          location: msg.location,
+          uuid: msg.uuid
+        },
+        token: registrationToken
+      }
+      admin.messaging()
+        .send(message)
+        .then(response => {
+          console.log("Successfully sent message:", response);
+        })
+        .catch(error => {
+          console.log("Error sending message:", error);
+        })
+    }
+  })
+})
+
+
+const port = process.env.PORT || 3000
+server.listen(port, () => {
+  console.log("Application is starting on port " + port);
 });
